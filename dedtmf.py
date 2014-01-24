@@ -44,10 +44,25 @@ def ola(X, hop):
 
 # based on https://code.google.com/p/vocoder-lpc/source/browse/lpc.py
 
+def autoco(x, p):
+    """
+    Calculate autocorrelation of x
+    Return only the first p values, i.e. r_xx[0] to r_xx[p-1]
+    """
+    # Naive version
+    #R = np.correlate(x, x, 'full')
+    #R = R[len(x)-1:len(x)+p]
+    # Better version (> twice as fast?)
+    X = np.fft.rfft(np.r_[x, np.zeros(p-1)])
+    rxx = np.fft.irfft(np.square(np.abs(X)))
+    return rxx[:p]
+
 def lpc_frame(x, p):
-    #R = [ auto_corr(x, k) for k in range(p+1) ]
-    R = np.correlate(x, x, 'full')
-    R = R[len(x)-1:len(x)+p]
+    """
+    Fit p'th order LPC model to a single frame of data in x
+    using Levinson-Durbin recursion
+    """
+    R = autoco(x, p+1)
     a = np.zeros((p+1, p+1))
     k = np.zeros(p+1)
 
@@ -187,14 +202,23 @@ def main(argv):
     # normalize short ints to floats of -1 / 1
     data = np.asfarray(wavd) / 32768.0  
 
-    # Apply
+    lendata = len(data)
     win_pts = 4096
     hop_pts = 256
+    # Pad with zeros - half a window before, a whole window after 
+    # just to make sure dropping the final part-window doesn't lose anything 
+    prepad_pts = win_pts/2
+    pdata = np.r_[np.zeros(prepad_pts),data,np.zeros(win_pts)]
+
+    # Apply
     lpc_order = 40
-    filtrd = dedtmf(data, lpc_order, win_pts, hop_pts)
+    filtrd = dedtmf(pdata, lpc_order, win_pts, hop_pts)
+
+    # Strip the padding
+    udata = filtrd[prepad_pts:prepad_pts + lendata]
 
     # Write the wav out
-    wav.write(outwavfile, srate, (32768.0*filtrd).astype(np.int16))
+    wav.write(outwavfile, srate, (32768.0*udata).astype(np.int16))
     print "Wrote ", outwavfile
 
 # Actually run main

@@ -17,7 +17,7 @@ THUMB=${DST}_thumb.png
 
 SRCS=${DEMOFILE}.m ${DST}.m frame.m ola.m rmsenv.m dedtmf.py
 
-DATA=${THUMB} phonexample.wav
+DATA=${THUMB} phonexample.wav out-ref.wav
 
 DEMOHTML=html/${DEMOFILE}.html
 DEMOINDEX=html/index.html
@@ -25,6 +25,11 @@ DEMOINDEX=html/index.html
 DSTINDEX=${DST}/index.html
 
 all: dist
+
+# Test the python version against an earlier version
+test:
+	./dedtmf.py phonexample.wav out.wav
+	sndcmp out-ref.wav out.wav
 
 ${DEMOHTML}: ${DEMOFILE}.m ${SRCS} ${DATA} 
 	${MATLAB} -r "spublish ${DEMOFILE}; exit"
