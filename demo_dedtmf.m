@@ -91,6 +91,11 @@ hold off;
 % Feel free to contact me with any problems.
 %
 
+%% Python Port
+%
+% I have ported this code to Python.  See
+% <https://github.com/dpwe/dedtmf dedtmf.py>.
+
 %% Changelog
 
 % 2013-11-26 v0.1 Initial release
