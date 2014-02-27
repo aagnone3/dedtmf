@@ -66,24 +66,29 @@ def lpc_frame(x, p):
     a = np.zeros((p+1, p+1))
     k = np.zeros(p+1)
 
-    E = np.r_[R[0], np.empty(p)]
-    for i in xrange(1, p + 1):
-      c = 0
-      for j in xrange(1, i):
-         c += a[j, i-1] * R[i-j]
-      k[i] = (R[i] - c) / E[i-1]
+    E = np.r_[R[0], np.zeros(p)]
 
-      a[i][i] = k[i]
-
-      for j in xrange(1, i):
-         a[j][i] = a[j][i-1] - k[i] * a[i-j][i-1]
-
-      E[i] = (1 - k[i]**2) * E[i-1]
-
-    fa = np.empty(p+1)
+    fa = np.zeros(p+1)
     fa[0] = 1
-    for j in xrange(1, p+1):
-      fa[j] = -a[j][p]
+
+    if R[0] > 0:
+      # Only do the recursion if this frame is nonempty
+      for i in xrange(1, p + 1):
+        c = 0
+        for j in xrange(1, i):
+           c += a[j, i-1] * R[i-j]
+        k[i] = (R[i] - c) / E[i-1]
+
+        a[i][i] = k[i]
+
+        for j in xrange(1, i):
+           a[j][i] = a[j][i-1] - k[i] * a[i-j][i-1]
+
+        E[i] = (1 - k[i]**2) * E[i-1]
+
+      for j in xrange(1, p+1):
+        fa[j] = -a[j][p]
+
     return fa, E[p]
 
 def lpc(X, order):
@@ -96,6 +101,8 @@ def lpc(X, order):
     for row in range(rows):
         #print "frame ", row, " of ", rows
         A[row,], E[row] = lpc_frame(X[row,:], order)
+        if E[row] == 0:
+            print "Empty frame: ", row, " of ", rows
     return A, E
 
 
@@ -123,11 +130,29 @@ def sigmoid(X):
 
 ########## main dedtmf ############
 
-def dedtmf(X, lpc_order=40, win_pts=4096, hop_pts=256):
+def dedtmf(X, lpc_order=40, win_pts=4096, hop_pts=256, params={}):
     """ Remove sustained, steady tones from an audio signal by finding strong 
         poles in LPC analysis on long-ish blocks, then inverse-filtering to 
         remove them.
     """
+    # Set up default params
+    # poleradthresh is the threshold for "capturing" poles
+    if 'poleradthresh' in params:
+        poleradthresh = params['poleradthresh']
+    else:
+        poleradthresh = 0.98
+    # poleradtrans is the transition width for pole capture
+    if 'poleradtrans' in params:
+        poleradtrans = params['poleradtrans']
+    else:
+        poleradtrans = 0.002
+    # polerad is the radius of the new poles put behind the introduced 
+    # circles to limit the notch width
+    if 'polerad' in params:
+        polerad = params['polerad']
+    else:
+        polerad = 0.98
+
     # Default hop is half whatever window is
     if hop_pts == 0:
         hop_pts = win_pts/2
@@ -145,18 +170,19 @@ def dedtmf(X, lpc_order=40, win_pts=4096, hop_pts=256):
     # Magnitudes of each pole
     Mf = np.absolute(Rf)
     # Corresponding pure-phase parts
-    Cf = Rf/Mf
+    Cf = Rf/(Mf + (Mf==0))
 
     # Modify magnitude; ensure smaller than 1
     # Use a sigmoid to make poles close to 1 even closer
-    poleradthresh = 0.98
-    poleradtrans =  0.002
+    # (defaults now set at top of function)
+    #poleradthresh = 0.98
+    #poleradtrans =  0.002
     #Mfm = (Mf > poleradthresh);
     Mfm = sigmoid( (Mf - poleradthresh)/poleradtrans )
     # New polynomial with exaggerated pole radii
     Bfe = polybyrow( Mfm * Cf )
     # Compensatory poles - just inside zeros
-    polerad = 0.98
+    #polerad = 0.98
     Afe = polybyrow( polerad*Mfm * Cf);
 
     # Apply inverse filters to each block of X
@@ -188,14 +214,58 @@ def dedtmf(X, lpc_order=40, win_pts=4096, hop_pts=256):
 
 ############## Provide a command-line wrapper
 
+def to_num(s):
+    ''' Converts a string to an int or a float if that works, 
+        else leaves it as a string'''
+    try:
+        return int(s)
+    except ValueError:
+        try:
+            return float(s)
+        except ValueError:
+            return s
+
+def parse_param_file(filename, defaults):
+    """ Read a param file of "key value" lines.  Return a dictionary of 
+        assignments.  Fill in defaults from default dict """
+    result = defaults
+    if len(filename):
+        with open(filename, 'r') as f:
+            for line in f:
+                keyval = line.lstrip().split(None, 1)
+                if len(keyval) > 0:
+                    key = keyval[0]
+                    if len(keyval) > 1:
+                        val = keyval[1]
+                    else:
+                        val = []
+                    if key != "" and key[0] != '#':
+                        # Overwrite or create
+                        result[key] = to_num(val)
+    return result
+
 def main(argv):
     """ Main routine to apply dedtmf from command line """
-    if len(argv) != 3:
+    if len(argv) != 3 and len(argv) != 4:
         raise NameError( ("Usage: ", argv[0], 
-                          " inputsound.wav outsound.wav") )
+                          " inputsound.wav outsound.wav [paramfile]") )
 
+    # Input and output files
     inwavfile = argv[1]
     outwavfile = argv[2]
+
+    # Read in param file (if any) and/or setup default values
+    paramfile = ''
+    if len(argv) == 4:
+        paramfile = argv[3]
+    params = parse_param_file(paramfile, 
+                              {'win_pts':4096, 
+                               'hop_pts':256, 
+                               'lpc_order':40, 
+                               'poleradthresh':0.98, 
+                               'poleradtrans':0.002, 
+                               'polerad':0.98})
+    #print params
 
     # Read in wav file
     srate, wavd = wav.read(inwavfile)
@@ -203,16 +273,19 @@ def main(argv):
     data = np.asfarray(wavd) / 32768.0  
 
     lendata = len(data)
-    win_pts = 4096
-    hop_pts = 256
+    #win_pts = 4096
+    #hop_pts = 256
+    win_pts = params['win_pts']
+    hop_pts = params['hop_pts']
     # Pad with zeros - half a window before, a whole window after 
     # just to make sure dropping the final part-window doesn't lose anything 
     prepad_pts = win_pts/2
-    pdata = np.r_[np.zeros(prepad_pts),data,np.zeros(win_pts)]
+    pdata = np.r_[np.zeros(prepad_pts), data, np.zeros(win_pts)]
 
     # Apply
-    lpc_order = 40
-    filtrd = dedtmf(pdata, lpc_order, win_pts, hop_pts)
+    #lpc_order = 40
+    lpc_order = params['lpc_order']
+    filtrd = dedtmf(pdata, lpc_order, win_pts, hop_pts, params)
 
     # Strip the padding
     udata = filtrd[prepad_pts:prepad_pts + lendata]
