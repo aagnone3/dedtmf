@@ -1,11 +1,16 @@
-function [Y,ER,Fs,Rs,Ts,Bfe,Afe] = dedtmf(X,P,W,H)
-% [Y,ER,Fs,Rs,Ts,Bf,Af] = dedtmf(X,P,W,H)
+function [Y,ER,Fs,Rs,Ts,Bfe,Afe] = dedtmf(X,P,W,H,params)
+% [Y,ER,Fs,Rs,Ts,Bf,Af] = dedtmf(X,P,W,H,params)
 %   Remove DTMF (and other stationary tones) from signal
 %   Inputs:
 %    X  - input waveform
 %    P  - order of LPC models to fit 
 %    W  - length of blocks for LPC fitting
 %    H  - hop between successive blocks
+%    params - additional parameters:
+%     params.poleradthreash (0.98) - radius threshold for mapping poles to zeros
+%     params.poleradtrans (0.002) - radius transition width for mapping
+%     params.polerad (0.98) - radius for added compensatory poles
+%     params.noiseexcite (0) - use white noise excitation (to debug)
 %   Returns:
 %    Y  - audio filtered to remove steady tones
 %    ER - block-wise energy ratio of original to filtered (close to
@@ -19,9 +24,16 @@ function [Y,ER,Fs,Rs,Ts,Bfe,Afe] = dedtmf(X,P,W,H)
 if nargin < 2; P = 16; end
 if nargin < 3; W = 1024; end
 if nargin < 4; H = W/2; end
+if nargin < 5; params.dummy = []; end  % to make it a struct
 
 VERSION=0.1;
 DATE=20131126;
+
+% default parameters
+if isfield(params, 'poleradthresh') == 0; params.poleradthresh = 0.98; end
+if isfield(params, 'poleradtrans') == 0; params.poleradtrans = 0.002; end
+if isfield(params, 'polerad') == 0; params.polerad = 0.98; end
+if isfield(params, 'noiseexcite') == 0; params.noiseexcite = 0; end
 
 % Break x into w-length blocks stepped by h
 Xf = frame(X,W,H);
@@ -52,17 +64,19 @@ Fs = Fs(keep);
 % K = 0.25;
 %Mfm = (1-abs(1-Mf)).^K;
 % Use a sigmoid to make poles close to 1 even closer
-poleradthresh = 0.98; % 0.98;
-poleradtrans =  0.002;% 0.001;
 %Mfm = (Mf > poleradthresh);
-Mfm = sigmoid( (Mf - poleradthresh)/poleradtrans );
+Mfm = sigmoid( (Mf - params.poleradthresh)/params.poleradtrans );
 % New polynomial with exaggerated pole radii
 Bfe = polybyrow( Mfm .* Cf );
 % Compensatory poles - just inside zeros
-polerad = 0.98;
-Afe = polybyrow( polerad*Mfm .* Cf);
+Afe = polybyrow( params.polerad*Mfm .* Cf);
 
 % Apply inverse filters to each block of X
+if params.noiseexcite
+  % Use white noise excitation of output to debug filtering
+  E = randn(length(X), 1);
+  Xf = frame(E,W,H);
+end
 [nr,nc] = size(Xf);
 Xff = zeros(nr, nc);
 for i = 1:nc
@@ -75,13 +89,14 @@ pad = W - L;
 win = [zeros(1,floor(pad/2)), hanning(L)', zeros(1,ceil(pad/2))];
 
 % Figure per-block energy ratio
-ER = sum((diag(win)*Xff).^2)./sum((diag(win)*Xf).^2);
+ER = sum(bsxfun(@times, Xff, win').^2)./sum(bsxfun(@times, Xf, win').^2);
 % Threshold
 ER = min(ER, 1.0);
 % scale
 %Xff = repmat(ER, size(Xff,1), 1).* Xff;
 
-Y = ola(diag(win)*Xff, H);
+%Y = ola(diag(win)*Xff, H);
+Y = ola(bsxfun(@times, Xff, win'), H);
 %Y = ola(diag(win)*Xf, H);
 
 
